@@ -1,0 +1,30 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: geo-time-mcp-server
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:postgresql://localhost:5433/microservice_metrics
+    username: metrics_writer
+    password: writer_pass
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+  ai:
+    openai:
+      base-url: http://localhost:18080
+      api-key: CDOT_AI_SECRET_SECURE_TOKEN_2026_XYZ
+      chat:
+        options:
+          model: ollama/qwen2.5:7b
+          temperature: 0.1
+    mcp:
+      server:
+        name: geo-time-tools
+        version: 1.0.0
+        type: SYNC
