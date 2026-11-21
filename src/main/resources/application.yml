@@ -16,6 +16,9 @@ spring:
       ddl-auto: update
     show-sql: true
   ai:
+    model:
+      chat: openai
+      embedding: ollama
     openai:
       base-url: http://localhost:18080
       api-key: CDOT_AI_SECRET_SECURE_TOKEN_2026_XYZ
@@ -23,6 +26,22 @@ spring:
         options:
           model: ollama/qwen2.5:7b
           temperature: 0.1
+    ollama:
+      base-url: ${OLLAMA_URL:http://localhost:11434}
+      embedding:
+        options:
+          model: ${EMBEDDING_MODEL:embeddinggemma-2:270m}
+    vectorstore:
+      milvus:
+        client:
+          host: ${MILVUS_HOST:localhost}
+          port: ${MILVUS_PORT:19530}
+        database-name: default
+        collection-name: city_aliases
+        embedding-dimension: 768
+        index-type: IVF_FLAT
+        metric-type: COSINE		
+        initialize-schema: true
     mcp:
       server:
         name: geo-time-tools

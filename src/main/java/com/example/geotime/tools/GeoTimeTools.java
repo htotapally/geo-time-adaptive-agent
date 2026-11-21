@@ -142,29 +142,39 @@ public class GeoTimeTools {
 		return fallbackLocations(city);
 	}
 
-	@Tool(description = "Resolve the exact IANA time zone ID for a location using its latitude, longitude, state, and county.")
-	public TimeZoneInfo getTimeZone(@ToolParam(description = "Latitude of the location") double latitude,
-			@ToolParam(description = "Longitude of the location") double longitude,
-			@ToolParam(description = "U.S. State name") String state,
-			@ToolParam(description = "County name") String county) {
-		try {
-			TimeApiZoneResponse response = restClient.get()
-					.uri(uriBuilder -> uriBuilder.scheme("https").host("timeapi.io").path("/api/TimeZone/coordinate")
-							.queryParam("latitude", latitude).queryParam("longitude", longitude).build())
-					.retrieve().body(TimeApiZoneResponse.class);
+    @Tool(description = "Resolves the authoritative IANA time zone ID for a U.S. coordinate pair, state, and county.")
+    public TimeApiZoneResponse getTimeZone(
+        @ToolParam(description = "Latitude") double latitude,
+        @ToolParam(description = "Longitude") double longitude,
+        @ToolParam(description = "U.S. State name") String state,
+        @ToolParam(description = "U.S. County or Parish name") String county
+    ) {
+        try {
+        	TimeApiZoneResponse response = restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                    .scheme("https")
+                    .host("timeapi.io")
+                    .path("/api/TimeZone/coordinate")
+                    .queryParam("latitude", latitude)
+                    .queryParam("longitude", longitude)
+                    .build())
+                .retrieve()
+                .body(TimeApiZoneResponse.class);
 
-			if (response != null && response.timeZone() != null) {
-				String abbr = ZonedDateTime.now(ZoneId.of(response.timeZone()))
-						.format(DateTimeFormatter.ofPattern("zzz"));
-				log.info("LIVE TimeAPI.io resolved ({}, {}) -> {}", state, county, response.timeZone());
-				return new TimeZoneInfo(state, county, response.timeZone(), abbr);
-			}
-		} catch (Exception ex) {
-			log.warn("TimeAPI.io failed for ({}, {}), using fallback: {}", state, county, ex.getMessage());
-		}
+            if (response != null && response.timeZone() != null && !response.timeZone().isBlank()) {
+                log.info("LIVE TimeAPI.io resolved ({}, {}) -> {}", state, county, response.timeZone());
+                return new TimeApiZoneResponse(response.timeZone());
+            }
+        } catch (Exception ex) {
+            log.warn("TimeAPI.io failed for ({}, {}), switching to local fallback: {}", state, county, ex.getMessage());
+        }
 
-		return fallbackTimeZone(state, county);
-	}
+        // Circuit-breaker fallback when TimeAPI.io is unreachable or times out!
+        String fallbackZone = resolveFallbackZoneId(state, county);
+        log.info("Fallback TimeZone resolved ({}, {}) -> {}", state, county, fallbackZone);
+        return new TimeApiZoneResponse(fallbackZone);
+    }
+
 
 	@Tool(description = "Get the current local time in ISO-8601 format for a given IANA time zone ID (e.g., America/New_York).")
 	public String getCurrentTime(
@@ -251,6 +261,28 @@ public class GeoTimeTools {
 		return new TimeZoneInfo(state, county, zone, abbr);
 	}
 
+    private String resolveFallbackZoneId(String state, String county) {
+        if (state == null) return "America/New_York";
+        String s = state.trim().toLowerCase();
+        String c = (county != null) ? county.trim().toLowerCase() : "";
+
+        // 1. Split-timezone county overrides
+        if (s.equals("indiana") && (c.contains("lake") || c.contains("porter") || c.contains("laporte") || c.contains("jasper") || c.contains("newton") || c.contains("posey") || c.contains("vanderburgh") || c.contains("warrick") || c.contains("gibson") || c.contains("spencer") || c.contains("perry"))) {
+            return "America/Chicago";
+        }
+
+        // 2. Canonical U.S. State -> Primary IANA Time Zone
+        return switch (s) {
+            case "alabama", "arkansas", "illinois", "iowa", "louisiana", "minnesota", "mississippi", "missouri", "oklahoma", "wisconsin", "texas", "kansas", "nebraska", "north dakota", "south dakota", "tennessee" -> "America/Chicago";
+            case "colorado", "montana", "new mexico", "utah", "wyoming", "idaho" -> "America/Denver";
+            case "arizona" -> "America/Phoenix";
+            case "california", "nevada", "oregon", "washington" -> "America/Los_Angeles";
+            case "alaska" -> "America/Anchorage";
+            case "hawaii" -> "Pacific/Honolulu";
+            default -> "America/New_York";
+        };
+    }
+	
 	// --- External API Response Records ---
 
 	@JsonIgnoreProperties(ignoreUnknown = true)
@@ -264,6 +296,6 @@ public class GeoTimeTools {
 	}
 
 	@JsonIgnoreProperties(ignoreUnknown = true)
-	private record TimeApiZoneResponse(String timeZone) {
+	public record TimeApiZoneResponse(String timeZone) {
 	}
 }

@@ -110,8 +110,9 @@
 				<div>
 					<div class="text-xs uppercase tracking-wider text-slate-400">Current
 						Local Time</div>
-					<div class="text-3xl font-mono font-bold text-white mt-1"
-						x-text="formatReadableTime(resolvedCard?.localTimeIso)"></div>
+					<div class="text-4xl font-extrabold text-white tracking-tight mt-1"
+						x-text="resolvedCard ? formatReadableTime(resolvedCard.localTimeIso, resolvedCard.zoneId || resolvedCard.timeZone) : ''">
+					</div>
 					<div class="text-xs font-mono text-slate-500 mt-1"
 						x-text="resolvedCard?.localTimeIso"></div>
 				</div>
@@ -326,15 +327,18 @@
           }
         },
 
-        formatReadableTime(iso) {
-          if (!iso) return '';
-          try {
-            const date = new Date(iso);
-            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          } catch {
-            return iso;
-          }
-        }
+        formatReadableTime(iso, tz) {
+       	  if (!iso) return '';
+       	  try {
+       	    // Normalize 7-digit Java nanoseconds (.6883111) to 3-digit JS milliseconds (.688)
+       	    const normalized = iso.replace(/(\.\d{3})\d+/, '$1');
+       	    const options = { hour: '2-digit', minute: '2-digit', second: '2-digit' };
+       	    if (tz) options.timeZone = tz;
+       	    return new Date(normalized).toLocaleTimeString('en-US', options);
+       	  } catch (e) {
+       	    return iso;
+       	  }
+       	}
       };
     }
   </script>
