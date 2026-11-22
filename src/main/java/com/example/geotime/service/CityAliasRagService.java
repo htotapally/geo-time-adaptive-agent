@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import io.micrometer.observation.annotation.Observed;
 
 @Service
 public class CityAliasRagService {
@@ -57,7 +58,8 @@ public class CityAliasRagService {
             log.info("Seeded {} U.S. city aliases into Milvus vector store!", aliases.size());
         };
     }
-
+    
+    @Observed(name = "agent.stage.3.rag-fallback")
     @Tool(description = "Semantic RAG fallback tool: resolves U.S. city nicknames, cultural aliases, or airport codes (e.g., 'The Big Easy', 'Music City', 'Motor City') into canonical 'City, State' format using Milvus vector similarity.")
     public String resolveCityAlias(
         @ToolParam(description = "The city nickname, cultural alias, or airport code to resolve") String aliasQuery

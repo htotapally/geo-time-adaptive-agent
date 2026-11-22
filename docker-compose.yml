@@ -1,0 +1,9 @@
+services:
+  geo-time-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geo-time-mcp-server
+    ports:
+      - "8083:8083"
+    restart: unless-stopped

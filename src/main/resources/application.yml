@@ -8,7 +8,7 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: jdbc:postgresql://localhost:5433/microservice_metrics
+    url: jdbc:postgresql://host.docker.internal:5433/microservice_metrics
     username: metrics_writer
     password: writer_pass
   jpa:
@@ -47,3 +47,15 @@ spring:
         name: geo-time-tools
         version: 1.0.0
         type: SYNC
+
+management:
+  tracing:
+    enabled: true
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${JAEGER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+  observations:
+    annotations:
+      enabled: true

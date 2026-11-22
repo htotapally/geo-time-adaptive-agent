@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import io.micrometer.observation.annotation.Observed;
 
 @Service
 public class GeoTimeTools {
@@ -43,6 +44,9 @@ public class GeoTimeTools {
 
 	private final RestClient restClient;
 
+	private final java.util.concurrent.atomic.AtomicBoolean timeApiCircuitOpen = new java.util.concurrent.atomic.AtomicBoolean(
+			false);
+
 	public GeoTimeTools(RestClient.Builder builder, AgentCheckpointRepository checkpointRepo,
 			ObjectMapper objectMapper) {
 		SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
@@ -54,73 +58,63 @@ public class GeoTimeTools {
 		this.checkpointRepo = checkpointRepo;
 		this.objectMapper = objectMapper;
 	}
-	
+
+	@Observed(name = "agent.stage.3.rag-fallback")
 	@Tool(description = "HITL PAUSE: Save candidate locations to Postgres when >5 matches are found. Returns a checkpointId to give the user so they can resume later.")
-	public String saveHitlCheckpoint(
-	    @ToolParam(description = "The searched city name") String queryCity,
-	    @ToolParam(description = "The list of candidate LocationMatch objects returned by lookupLocation") List<LocationMatch> candidates
-	) {
-	    try {
-	        String id = "chk-" + queryCity.toLowerCase().replaceAll("[^a-z0-9]", "") + "-" + (System.currentTimeMillis() % 10000);
-	        String json = objectMapper.writeValueAsString(candidates);
-	        checkpointRepo.save(new AgentCheckpoint(id, queryCity, json));
-	        log.info("HITL CHECKPOINT SAVED -> id={}, city={}, candidates={}", id, queryCity, candidates.size());
-	        return id;
-	    } catch (Exception e) {
-	        log.error("Failed to save HITL checkpoint", e);
-	        return "ERROR_SAVING_CHECKPOINT";
-	    }
+	public String saveHitlCheckpoint(@ToolParam(description = "The searched city name") String queryCity,
+			@ToolParam(description = "The list of candidate LocationMatch objects returned by lookupLocation") List<LocationMatch> candidates) {
+		try {
+			String id = "chk-" + queryCity.toLowerCase().replaceAll("[^a-z0-9]", "") + "-"
+					+ (System.currentTimeMillis() % 10000);
+			String json = objectMapper.writeValueAsString(candidates);
+			checkpointRepo.save(new AgentCheckpoint(id, queryCity, json));
+			log.info("HITL CHECKPOINT SAVED -> id={}, city={}, candidates={}", id, queryCity, candidates.size());
+			return id;
+		} catch (Exception e) {
+			log.error("Failed to save HITL checkpoint", e);
+			return "ERROR_SAVING_CHECKPOINT";
+		}
 	}
 
+	@Observed(name = "agent.stage.3.rag-fallback")
 	@Tool(description = "HITL RESUME: Load a saved checkpoint from Postgres using checkpointId and filter to the user's chosen state without calling external geocoding APIs.")
 	public LocationMatch resumeHitlCheckpoint(
-	    @ToolParam(description = "The checkpointId returned when the workflow paused") String checkpointId,
-	    @ToolParam(description = "The U.S. state specified by the user, e.g., Tennessee") String chosenState
-	) {
-	    AgentCheckpoint checkpoint = checkpointRepo.findById(checkpointId)
-	        .orElseThrow(() -> new IllegalArgumentException("Checkpoint not found: " + checkpointId));
+			@ToolParam(description = "The checkpointId returned when the workflow paused") String checkpointId,
+			@ToolParam(description = "The U.S. state specified by the user, e.g., Tennessee") String chosenState) {
+		AgentCheckpoint checkpoint = checkpointRepo.findById(checkpointId)
+				.orElseThrow(() -> new IllegalArgumentException("Checkpoint not found: " + checkpointId));
 
-	    try {
-	        List<LocationMatch> saved = objectMapper.readValue(
-	            checkpoint.getCandidatesJson(),
-	            new TypeReference<List<LocationMatch>>() {}
-	        );
+		try {
+			List<LocationMatch> saved = objectMapper.readValue(checkpoint.getCandidatesJson(),
+					new TypeReference<List<LocationMatch>>() {
+					});
 
-	        LocationMatch match = saved.stream()
-	            .filter(loc -> loc.state().equalsIgnoreCase(chosenState.trim()))
-	            .findFirst()
-	            .orElseThrow(() -> new IllegalArgumentException("State '" + chosenState + "' not found in checkpoint " + checkpointId));
+			LocationMatch match = saved.stream().filter(loc -> loc.state().equalsIgnoreCase(chosenState.trim()))
+					.findFirst().orElseThrow(() -> new IllegalArgumentException(
+							"State '" + chosenState + "' not found in checkpoint " + checkpointId));
 
-	        checkpoint.setStatus("RESUMED");
-	        checkpoint.setResumedAt(java.time.Instant.now());
-	        checkpointRepo.save(checkpoint);
+			checkpoint.setStatus("RESUMED");
+			checkpoint.setResumedAt(java.time.Instant.now());
+			checkpointRepo.save(checkpoint);
 
-	        log.info("HITL CHECKPOINT RESUMED -> id={}, resolved={}", checkpointId, match);
-	        return match;
-	    } catch (Exception e) {
-	        throw new RuntimeException("Failed to resume checkpoint: " + e.getMessage(), e);
-	    }
-	}	
+			log.info("HITL CHECKPOINT RESUMED -> id={}, resolved={}", checkpointId, match);
+			return match;
+		} catch (Exception e) {
+			throw new RuntimeException("Failed to resume checkpoint: " + e.getMessage(), e);
+		}
+	}
 
+	@Observed(name = "agent.stage.3.rag-fallback")
 	@Tool(description = "Look up U.S. locations matching a city name. Returns city, county, state, coordinates, and whether the state spans multiple time zones.")
 	public List<LocationMatch> lookupLocation(
 			@ToolParam(description = "The U.S. city name to search, e.g., Atlanta, Springfield, Gary") String city) {
 		try {
 			OpenMeteoResponse response = restClient.get()
-				    .uri(uriBuilder -> uriBuilder
-				        .scheme("https")
-				        .host("geocoding-api.open-meteo.com")
-				        .path("/v1/search")
-				        .queryParam("name", city)
-				        .queryParam("count", 10)
-				        .queryParam("countryCode", "US")
-				        .queryParam("format", "json")
-				        .build())
-				    .retrieve()
-				    .body(OpenMeteoResponse.class);
+					.uri(uriBuilder -> uriBuilder.scheme("https").host("geocoding-api.open-meteo.com")
+							.path("/v1/search").queryParam("name", city).queryParam("count", 10)
+							.queryParam("countryCode", "US").queryParam("format", "json").build())
+					.retrieve().body(OpenMeteoResponse.class);
 
-
-			
 			if (response != null && response.results() != null && !response.results().isEmpty()) {
 				// Deduplicate by State so Supervisor fans out across distinct states
 				Map<String, LocationMatch> byState = new LinkedHashMap<>();
@@ -142,40 +136,37 @@ public class GeoTimeTools {
 		return fallbackLocations(city);
 	}
 
-    @Tool(description = "Resolves the authoritative IANA time zone ID for a U.S. coordinate pair, state, and county.")
-    public TimeApiZoneResponse getTimeZone(
-        @ToolParam(description = "Latitude") double latitude,
-        @ToolParam(description = "Longitude") double longitude,
-        @ToolParam(description = "U.S. State name") String state,
-        @ToolParam(description = "U.S. County or Parish name") String county
-    ) {
-        try {
-        	TimeApiZoneResponse response = restClient.get()
-                .uri(uriBuilder -> uriBuilder
-                    .scheme("https")
-                    .host("timeapi.io")
-                    .path("/api/TimeZone/coordinate")
-                    .queryParam("latitude", latitude)
-                    .queryParam("longitude", longitude)
-                    .build())
-                .retrieve()
-                .body(TimeApiZoneResponse.class);
+	@Observed(name = "agent.stage.3.rag-fallback")
+	@Tool(description = "Resolves the authoritative IANA time zone ID for a U.S. coordinate pair, state, and county.")
+	public TimeApiZoneResponse getTimeZone(@ToolParam(description = "Latitude") double latitude,
+			@ToolParam(description = "Longitude") double longitude,
+			@ToolParam(description = "U.S. State name") String state,
+			@ToolParam(description = "U.S. County or Parish name") String county) {
+		if (timeApiCircuitOpen.get()) {
+            log.info("Circuit breaker OPEN: bypassing TimeAPI.io for ({}, {})", state, county);
+            return new TimeApiZoneResponse(resolveFallbackZoneId(state, county));
+        }		
+		try {
+			TimeApiZoneResponse response = restClient.get()
+					.uri(uriBuilder -> uriBuilder.scheme("https").host("timeapi.io").path("/api/TimeZone/coordinate")
+							.queryParam("latitude", latitude).queryParam("longitude", longitude).build())
+					.retrieve().body(TimeApiZoneResponse.class);
 
-            if (response != null && response.timeZone() != null && !response.timeZone().isBlank()) {
-                log.info("LIVE TimeAPI.io resolved ({}, {}) -> {}", state, county, response.timeZone());
-                return new TimeApiZoneResponse(response.timeZone());
-            }
-        } catch (Exception ex) {
-            log.warn("TimeAPI.io failed for ({}, {}), switching to local fallback: {}", state, county, ex.getMessage());
-        }
+			if (response != null && response.timeZone() != null && !response.timeZone().isBlank()) {
+				log.info("LIVE TimeAPI.io resolved ({}, {}) -> {}", state, county, response.timeZone());
+				return new TimeApiZoneResponse(response.timeZone());
+			}
+		} catch (Exception ex) {
+			log.warn("TimeAPI.io failed for ({}, {}), switching to local fallback: {}", state, county, ex.getMessage());
+		}
 
-        // Circuit-breaker fallback when TimeAPI.io is unreachable or times out!
-        String fallbackZone = resolveFallbackZoneId(state, county);
-        log.info("Fallback TimeZone resolved ({}, {}) -> {}", state, county, fallbackZone);
-        return new TimeApiZoneResponse(fallbackZone);
-    }
+		// Circuit-breaker fallback when TimeAPI.io is unreachable or times out!
+		String fallbackZone = resolveFallbackZoneId(state, county);
+		log.info("Fallback TimeZone resolved ({}, {}) -> {}", state, county, fallbackZone);
+		return new TimeApiZoneResponse(fallbackZone);
+	}
 
-
+	@Observed(name = "agent.stage.3.rag-fallback")
 	@Tool(description = "Get the current local time in ISO-8601 format for a given IANA time zone ID (e.g., America/New_York).")
 	public String getCurrentTime(
 			@ToolParam(description = "Valid IANA time zone ID such as America/New_York or America/Chicago") String zoneId) {
@@ -188,6 +179,7 @@ public class GeoTimeTools {
 	public record ValidationResult(boolean valid, List<String> errors) {
 	}
 
+	@Observed(name = "agent.stage.3.rag-fallback")
 	@Tool(description = "MANDATORY: Validate your final LocationTimeReport JSON before returning it to the user. If valid is false, fix every listed error and re-validate.")
 	public ValidationResult validateTimeReport(
 			@ToolParam(description = "The draft report to validate") LocationTimeReport draft) {
@@ -226,6 +218,15 @@ public class GeoTimeTools {
 		return new ValidationResult(errors.isEmpty(), errors);
 	}
 
+	public boolean isTimeApiCircuitOpen() {
+		return timeApiCircuitOpen.get();
+	}
+
+	public void setTimeApiCircuitOpen(boolean open) {
+		this.timeApiCircuitOpen.set(open);
+		log.warn("AIOPS REMEDIATION ACTION: TimeAPI.io circuit breaker set to OPEN={}", open);
+	}
+
 	// --- Local Circuit-Breaker Fallbacks ---
 
 	private List<LocationMatch> fallbackLocations(String city) {
@@ -261,28 +262,33 @@ public class GeoTimeTools {
 		return new TimeZoneInfo(state, county, zone, abbr);
 	}
 
-    private String resolveFallbackZoneId(String state, String county) {
-        if (state == null) return "America/New_York";
-        String s = state.trim().toLowerCase();
-        String c = (county != null) ? county.trim().toLowerCase() : "";
+	private String resolveFallbackZoneId(String state, String county) {
+		if (state == null)
+			return "America/New_York";
+		String s = state.trim().toLowerCase();
+		String c = (county != null) ? county.trim().toLowerCase() : "";
 
-        // 1. Split-timezone county overrides
-        if (s.equals("indiana") && (c.contains("lake") || c.contains("porter") || c.contains("laporte") || c.contains("jasper") || c.contains("newton") || c.contains("posey") || c.contains("vanderburgh") || c.contains("warrick") || c.contains("gibson") || c.contains("spencer") || c.contains("perry"))) {
-            return "America/Chicago";
-        }
+		// 1. Split-timezone county overrides
+		if (s.equals("indiana") && (c.contains("lake") || c.contains("porter") || c.contains("laporte")
+				|| c.contains("jasper") || c.contains("newton") || c.contains("posey") || c.contains("vanderburgh")
+				|| c.contains("warrick") || c.contains("gibson") || c.contains("spencer") || c.contains("perry"))) {
+			return "America/Chicago";
+		}
 
-        // 2. Canonical U.S. State -> Primary IANA Time Zone
-        return switch (s) {
-            case "alabama", "arkansas", "illinois", "iowa", "louisiana", "minnesota", "mississippi", "missouri", "oklahoma", "wisconsin", "texas", "kansas", "nebraska", "north dakota", "south dakota", "tennessee" -> "America/Chicago";
-            case "colorado", "montana", "new mexico", "utah", "wyoming", "idaho" -> "America/Denver";
-            case "arizona" -> "America/Phoenix";
-            case "california", "nevada", "oregon", "washington" -> "America/Los_Angeles";
-            case "alaska" -> "America/Anchorage";
-            case "hawaii" -> "Pacific/Honolulu";
-            default -> "America/New_York";
-        };
-    }
-	
+		// 2. Canonical U.S. State -> Primary IANA Time Zone
+		return switch (s) {
+		case "alabama", "arkansas", "illinois", "iowa", "louisiana", "minnesota", "mississippi", "missouri", "oklahoma",
+				"wisconsin", "texas", "kansas", "nebraska", "north dakota", "south dakota", "tennessee" ->
+			"America/Chicago";
+		case "colorado", "montana", "new mexico", "utah", "wyoming", "idaho" -> "America/Denver";
+		case "arizona" -> "America/Phoenix";
+		case "california", "nevada", "oregon", "washington" -> "America/Los_Angeles";
+		case "alaska" -> "America/Anchorage";
+		case "hawaii" -> "Pacific/Honolulu";
+		default -> "America/New_York";
+		};
+	}
+
 	// --- External API Response Records ---
 
 	@JsonIgnoreProperties(ignoreUnknown = true)

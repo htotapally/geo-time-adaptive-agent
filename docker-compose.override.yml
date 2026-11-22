@@ -1,0 +1,15 @@
+services:
+  geo-time-mcp-server:
+    environment:
+      - SERVER_PORT=8083
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0
+      - DB_HOST=docker.internal
+      - MILVUS_HOST=docker.internal
+      - MILVUS_PORT=19530
+      - JAEGER_OTLP_ENDPOINT=http://docker.internal:4318/v1/traces
+      - OLLAMA_URL=http://192.168.1.171:11434
+      - EMBEDDING_MODEL=nomic-embed-text
+      - CHAT_BASE_URL=http://192.168.1.171:11434
+      - CHAT_MODEL=qwen2.5:3b
+    extra_hosts:
+      - "docker.internal:host-gateway"
